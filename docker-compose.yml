@@ -1,0 +1,30 @@
+services:
+
+  db:
+    image: postgres:17
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: interview_prep_db
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+
+    env_file:
+    - .env
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
