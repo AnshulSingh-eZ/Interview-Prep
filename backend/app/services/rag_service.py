@@ -1,8 +1,7 @@
 """
-Small RAG pipeline for one interview session.
-
-1. Split resume, job description, and company profile into chunks.
-2. Embed each chunk (Gemini embeddings, or a local hash vector if the API is down).
+workflow :-
+1. Split resume, jd, and company profile into chunks.
+2. Embed each chunk (Gemini embeddings).
 3. Store chunks in Postgres.
 4. Retrieve the closest chunks for a query and pass that text to Gemini.
 """
