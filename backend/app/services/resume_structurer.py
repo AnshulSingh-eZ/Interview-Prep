@@ -2,20 +2,12 @@
 Resume structurer: attempts to extract structured fields from raw resume text
 using the Gemini API. Falls back to a minimal dict if Gemini is unavailable.
 """
-import os
-import json
 import logging
 
 logger = logging.getLogger(__name__)
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if genai and GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+from app.config.gemini_config import generate_text
+from app.services.evaluation_service import extract_json
 
 
 def structure_resume(raw_text: str) -> dict:
@@ -23,10 +15,6 @@ def structure_resume(raw_text: str) -> dict:
     Parse raw resume text into structured JSON.
     Returns a dict with keys: skills, projects, experience, education.
     """
-    if not genai or not GEMINI_API_KEY:
-        logger.info("GEMINI_API_KEY not set – returning minimal resume structure.")
-        return _minimal_structure(raw_text)
-
     prompt = (
         "Extract structured information from the following resume text. "
         "Return a JSON object with keys: "
@@ -39,15 +27,10 @@ def structure_resume(raw_text: str) -> dict:
         f"Resume:\n{raw_text[:6000]}"
     )
     try:
-        model = genai.GenerativeModel("models/gemini-3.5-flash")
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.2,
-                response_mime_type="application/json",
-            ),
-        )
-        parsed = json.loads(response.text)
+        text = generate_text(prompt, temperature=0.2, json_mode=True)
+        if not text:
+            return _minimal_structure(raw_text)
+        parsed = extract_json(text)
         # Ensure all expected keys exist
         return {
             "skills": parsed.get("skills", []),

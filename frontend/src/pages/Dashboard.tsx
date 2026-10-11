@@ -34,7 +34,7 @@ const Dashboard: React.FC = () => {
         setHistory(Array.isArray(hist) ? hist : []);
         setWeakTopics(weak?.weak_topics ?? []);
       } catch {
-        // Non-critical: dashboard still shows without analytics
+        // Dashboard still renders if analytics are unavailable.
       } finally {
         setHistLoading(false);
       }
@@ -43,174 +43,121 @@ const Dashboard: React.FC = () => {
     else setHistLoading(false);
   }, [isAuthenticated]);
 
-  const latestSession = history[0];
   const avgScore =
     history.length > 0
-      ? Math.round(history.reduce((s, h) => s + h.score, 0) / history.length)
+      ? Math.round(history.reduce((sum, item) => sum + item.score, 0) / history.length)
       : null;
 
+  const actions = [
+    {
+      id: "action-upload-resume",
+      icon: "01",
+      label: "Upload resume",
+      desc: "Parse skills, projects, and experience",
+      path: "/resume",
+    },
+    {
+      id: "action-select-company",
+      icon: "02",
+      label: "Start practice",
+      desc: "Pick a company and add the job description",
+      path: "/companies",
+    },
+    {
+      id: "action-continue-interview",
+      icon: "03",
+      label: sessionId ? "Continue interview" : "No active interview",
+      desc: sessionId ? "Pick up the current session" : "Start one from Practice",
+      path: sessionId ? `/interview/${sessionId}` : null,
+    },
+    {
+      id: "action-view-results",
+      icon: "04",
+      label: "Latest results",
+      desc: sessionId ? "Scores from the current session" : "Finish an interview first",
+      path: sessionId ? `/results/${sessionId}` : null,
+    },
+  ];
+
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
-      {/* Welcome Banner */}
-      <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-8 text-white shadow-lg">
-        <h1 className="text-3xl font-extrabold">Interview Intelligence Platform</h1>
-        <p className="mt-2 opacity-85 text-lg">
-          {isAuthenticated
-            ? "Your AI-powered interview coach is ready."
-            : "Please log in to continue."}
-        </p>
-        {avgScore !== null && (
-          <p className="mt-3 text-sm font-medium bg-white/20 inline-block px-3 py-1 rounded-full">
-            Average Score: {avgScore}% across {history.length} session{history.length !== 1 ? "s" : ""}
+    <div className="page space-y-8">
+      <section className="card overflow-hidden">
+        <div className="bg-gradient-to-r from-indigo-500/30 to-pink-500/20 p-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-200">Interview Coach</p>
+          <h1 className="mt-2 text-4xl">Prepare for the role you actually want.</h1>
+          <p className="mt-3 max-w-2xl text-slate-300">
+            Upload a resume, add a job description, and practice questions grounded in both.
           </p>
-        )}
-      </div>
-
-      {/* Quick Actions */}
-      <div>
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            {
-              id: "action-upload-resume",
-              icon: "📄",
-              label: "Upload Resume",
-              desc: "Parse your resume for tailored questions",
-              path: "/resume",
-              gradient: "from-purple-500 to-indigo-500",
-              disabled: false,
-            },
-            {
-              id: "action-select-company",
-              icon: "🏢",
-              label: "Select Company",
-              desc: "Choose a company to mock interview",
-              path: "/companies",
-              gradient: "from-blue-500 to-cyan-500",
-              disabled: false,
-            },
-            {
-              id: "action-continue-interview",
-              icon: "🎯",
-              label: sessionId ? "Continue Interview" : "Start Interview",
-              desc: sessionId ? "Resume your active session" : "Select a company first",
-              path: sessionId ? `/interview/${sessionId}` : null,
-              gradient: "from-green-500 to-emerald-500",
-              disabled: !sessionId,
-            },
-            {
-              id: "action-view-results",
-              icon: "📊",
-              label: "View Results",
-              desc: sessionId ? "See your latest session results" : "No session yet",
-              path: sessionId ? `/results/${sessionId}` : null,
-              gradient: "from-orange-500 to-rose-500",
-              disabled: !sessionId,
-            },
-          ].map((action) => (
-            <button
-              key={action.id}
-              id={action.id}
-              onClick={() => action.path && navigate(action.path)}
-              disabled={action.disabled}
-              className={`group relative overflow-hidden rounded-2xl p-5 text-left shadow transition-all duration-200
-                ${action.disabled
-                  ? "bg-gray-100 cursor-not-allowed opacity-60"
-                  : "bg-white hover:shadow-lg hover:-translate-y-0.5 active:scale-95 cursor-pointer"
-                }`}
-            >
-              {!action.disabled && (
-                <div
-                  className={`absolute inset-0 bg-gradient-to-br ${action.gradient} opacity-0 group-hover:opacity-5 transition-opacity`}
-                />
-              )}
-              <div className="text-3xl mb-3">{action.icon}</div>
-              <h3 className="font-semibold text-gray-900">{action.label}</h3>
-              <p className="text-xs text-gray-500 mt-1">{action.desc}</p>
-              {!action.disabled && (
-                <div
-                  className={`mt-3 text-xs font-semibold bg-gradient-to-r ${action.gradient} bg-clip-text text-transparent`}
-                >
-                  Go →
-                </div>
-              )}
-            </button>
-          ))}
+          {avgScore !== null && (
+            <p className="mt-4 inline-block rounded-full bg-white/10 px-3 py-1 text-sm text-white">
+              Average score {avgScore}% across {history.length} session{history.length === 1 ? "" : "s"}
+            </p>
+          )}
         </div>
-      </div>
+      </section>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Weak Topics */}
-        <div className="bg-white rounded-2xl shadow p-6 space-y-3">
-          <h3 className="text-lg font-bold text-gray-900">Weak Topics</h3>
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {actions.map((action) => (
+          <button
+            key={action.id}
+            id={action.id}
+            disabled={!action.path}
+            onClick={() => action.path && navigate(action.path)}
+            className="card p-5 text-left transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <p className="text-xs font-semibold text-indigo-300">{action.icon}</p>
+            <h2 className="mt-3 text-lg">{action.label}</h2>
+            <p className="mt-1 text-sm">{action.desc}</p>
+          </button>
+        ))}
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="card p-6">
+          <h2 className="text-lg">Weak topics</h2>
           {histLoading ? (
-            <div className="animate-pulse space-y-2">
-              <div className="h-4 bg-gray-100 rounded w-3/4" />
-              <div className="h-4 bg-gray-100 rounded w-1/2" />
-            </div>
+            <p className="mt-4 text-sm">Loading…</p>
           ) : weakTopics.length > 0 ? (
-            <ul className="space-y-2">
-              {weakTopics.map((wt) => (
-                <li key={wt.topic} className="flex items-center justify-between text-sm">
-                  <span className="text-gray-700">{wt.topic}</span>
-                  <span className="text-red-500 font-semibold">{wt.score}%</span>
+            <ul className="mt-4 space-y-2">
+              {weakTopics.map((topic) => (
+                <li key={topic.topic} className="flex items-center justify-between text-sm">
+                  <span className="text-slate-200">{topic.topic}</span>
+                  <span className="text-rose-300">{topic.score}%</span>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-gray-400 text-sm">
-              Complete an interview to see your weak areas.
-            </p>
+            <p className="mt-4 text-sm">Complete an interview to see weak areas.</p>
           )}
         </div>
 
-        {/* Interview History */}
-        <div className="bg-white rounded-2xl shadow p-6 col-span-1 md:col-span-2 space-y-3">
-          <h3 className="text-lg font-bold text-gray-900">Recent Interviews</h3>
+        <div className="card p-6 md:col-span-2">
+          <h2 className="text-lg">Recent interviews</h2>
           {histLoading ? (
-            <div className="animate-pulse space-y-3">
-              {[1, 2].map((i) => (
-                <div key={i} className="h-10 bg-gray-100 rounded-lg" />
-              ))}
-            </div>
+            <p className="mt-4 text-sm">Loading…</p>
           ) : history.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="mt-3 overflow-x-auto">
+              <table>
                 <thead>
-                  <tr className="text-gray-400 text-xs uppercase tracking-wide border-b border-gray-100">
-                    <th className="text-left py-2 pr-4">Company</th>
-                    <th className="text-left py-2 pr-4">Score</th>
-                    <th className="text-left py-2">Date</th>
-                    <th className="text-left py-2"></th>
+                  <tr>
+                    <th>Company</th>
+                    <th>Score</th>
+                    <th>Date</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {history.slice(0, 5).map((h) => (
-                    <tr key={h.session_id} className="border-b border-gray-50 hover:bg-gray-50 transition">
-                      <td className="py-2.5 pr-4 font-medium text-gray-900">{h.company}</td>
-                      <td className="py-2.5 pr-4">
-                        <span
-                          className={`font-semibold ${
-                            h.score >= 75
-                              ? "text-green-600"
-                              : h.score >= 50
-                              ? "text-yellow-600"
-                              : "text-red-500"
-                          }`}
-                        >
-                          {h.score}%
-                        </span>
-                      </td>
-                      <td className="py-2.5 text-gray-500">
-                        {new Date(h.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="py-2.5">
+                  {history.slice(0, 5).map((item) => (
+                    <tr key={item.session_id}>
+                      <td className="text-slate-100">{item.company}</td>
+                      <td>{item.score}%</td>
+                      <td>{new Date(item.created_at).toLocaleDateString()}</td>
+                      <td>
                         <button
-                          onClick={() => navigate(`/results/${h.session_id}`)}
-                          className="text-blue-500 hover:text-blue-700 text-xs font-medium"
+                          onClick={() => navigate(`/results/${item.session_id}`)}
+                          className="text-sm text-indigo-300"
                         >
-                          View →
+                          View
                         </button>
                       </td>
                     </tr>
@@ -219,12 +166,10 @@ const Dashboard: React.FC = () => {
               </table>
             </div>
           ) : (
-            <p className="text-gray-400 text-sm">
-              No interviews yet. Select a company to get started!
-            </p>
+            <p className="mt-4 text-sm">No interviews yet. Start one from Practice.</p>
           )}
         </div>
-      </div>
+      </section>
     </div>
   );
 };

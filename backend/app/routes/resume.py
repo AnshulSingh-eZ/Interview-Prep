@@ -17,12 +17,11 @@ async def upload_resume(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-        raw_text = extract_text_from_pdf(
-            file.file
-        )
-        parsed_data = structure_resume(
-            raw_text
-        )
+        raw_text = extract_text_from_pdf(file.file) or ""
+        if not raw_text.strip():
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Could not read text from that PDF.")
+        parsed_data = structure_resume(raw_text)
         resume = Resume(
             user_id=current_user.id,
             raw_text=raw_text,
@@ -33,5 +32,9 @@ async def upload_resume(
         db.refresh(resume)
         return {
             "resume_id": str(resume.id),
-            "message": "Resume uploaded successfully"
+            "message": "Resume uploaded successfully",
+            "skills": parsed_data.get("skills") or [],
+            "projects": parsed_data.get("projects") or [],
+            "experience": parsed_data.get("experience") or [],
+            "education": parsed_data.get("education") or [],
         }

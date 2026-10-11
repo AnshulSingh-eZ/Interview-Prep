@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,7 +9,10 @@ from app.schemas.interview_answer import InterviewAnswerCreate, InterviewAnswerO
 from app.schemas.interview_result import InterviewResultOut
 from app.models.interview_session import InterviewSession
 from app.models.interview_question import InterviewQuestion
+from app.models.interview_response import InterviewResponse
 from app.services.interview_service import start_interview, submit_answer, get_results, get_mode_questions
+from app.redis_store import list_followup_evals
+from app.services.resume_parser import extract_text_from_pdf
 from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
@@ -28,12 +31,19 @@ def interview_start(
     """Start a new interview session for the authenticated user.
     Expected payload: {"company_id": "<uuid>"}
     """
+    company_id = payload.get("company_id")
     company_ids = payload.get("company_ids")
+    if company_id:
+        company_ids = [company_id]
     if not company_ids or not isinstance(company_ids, list):
-        raise HTTPException(status_code=400, detail="company_ids must be a non-empty list")
+        raise HTTPException(status_code=400, detail="Select a company before starting.")
+    job_description = payload.get("job_description") or ""
     try:
         session_id, questions = start_interview(
-            db, user_id=current_user.id, company_ids=company_ids
+            db,
+            user_id=current_user.id,
+            company_ids=company_ids,
+            job_description=job_description,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -60,9 +70,23 @@ def interview_questions(
     questions = (
         db.query(InterviewQuestion)
         .filter(InterviewQuestion.session_id == session.id)
-        .order_by(InterviewQuestion.created_at)
+        .order_by(InterviewQuestion.position.asc().nulls_last(), InterviewQuestion.created_at)
         .all()
     )
+    answered_ids = [q.id for q in questions]
+    answered = set()
+    if answered_ids:
+        answered = {
+            str(row.question_id)
+            for row in db.query(InterviewResponse.question_id)
+            .filter(InterviewResponse.question_id.in_(answered_ids))
+            .all()
+        }
+    try:
+        for item in list_followup_evals(session_id):
+            answered.add(str(item.get("question_id")))
+    except Exception:
+        logger.warning("Redis not reachable while loading answered follow-ups.")
     return [
         {
             "id": str(q.id),
@@ -70,9 +94,29 @@ def interview_questions(
             "category": q.category,
             "text": q.question,
             "difficulty": q.difficulty,
+            "is_followup": bool(q.is_followup),
+            "answered": str(q.id) in answered,
         }
         for i, q in enumerate(questions)
     ]
+
+
+@router.post("/jd/extract")
+async def extract_job_description(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Read a PDF or text job description so the client can send it with /interview/start."""
+    name = (file.filename or "").lower()
+    if name.endswith(".pdf"):
+        text = extract_text_from_pdf(file.file)
+    else:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="ignore")
+    text = (text or "").strip()
+    if len(text) < 40:
+        raise HTTPException(status_code=400, detail="Could not read enough text from that file.")
+    return {"text": text[:20000]}
 
 
 @router.post("/{session_id}/answer", response_model=InterviewAnswerOut)

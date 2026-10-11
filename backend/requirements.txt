@@ -10,5 +10,6 @@ python-jose[cryptography]
 email-validator
 uuid
 pypdf
-google-generativeai
+google-genai
 python-multipart
+redis

@@ -1,11 +1,3 @@
-"""
-Core interview service: start_interview, submit_answer, get_results.
-
-Adaptive logic (Phase 3):
-  - Fetches existing TopicScores for the user.
-  - Identifies weakest topics (score < 6/10).
-  - Biases question generation: 40% weak topics, 30% company focus, 30% resume.
-"""
 import uuid
 import json
 import logging
@@ -19,7 +11,16 @@ from app.models.interview_question import InterviewQuestion
 from app.models.interview_response import InterviewResponse
 from app.models.resume import Resume
 from app.models.topic_score import TopicScore
-from app.services.evaluation_service import generate_interview_questions, evaluate_answer, generate_mode_questions
+from app.models.job_description import JobDescription
+from app.services.evaluation_service import (
+    generate_interview_questions,
+    evaluate_answer,
+    generate_mode_questions,
+    generate_followup_questions,
+)
+from app.services.jd_parser import parse_job_description
+from app.services.rag_service import index_source, retrieve
+from app.redis_store import clear_followup_evals, list_followup_evals, save_followup_eval
 
 logger = logging.getLogger(__name__)
 
@@ -117,82 +118,130 @@ def _build_adaptive_distribution(
     return base_alloc
 
 
-def start_interview(
-    db: Session,
-    *,
-    user_id: uuid.UUID,
-    company_ids: List[str],
-) -> Tuple[uuid.UUID, List[Dict[str, Any]]]:
-    """
-    Create an InterviewSession, generate questions adaptively, persist them.
-    Returns (session_id, questions_list).
-    """
-    resume = _fetch_latest_resume(db, user_id)
-    # Validate company selection
-    if not company_ids:
-        raise ValueError("At least one company_id must be provided.")
-    # Fetch the primary company (first) for distribution and prompt
-    company = _fetch_company(db, company_ids[0])
-
-    # Adaptive distribution
-    topic_scores = _get_user_topic_scores(db, user_id)
-    distribution = _build_adaptive_distribution(topic_scores, company, total_questions=10)
-
-    logger.info(
-        "Starting interview for user=%s company=%s distribution=%s",
-        user_id, company.name, distribution,
-    )
-
-    # Build company dict for Gemini prompt, now includes list of company_ids
-    company_dict = {
+def _company_dict(company: CompanyProfile, topic_scores: Dict[str, float]) -> Dict[str, Any]:
+    return {
         "name": company.name,
         "focus_topics": company.focus_topics or [],
         "behavioral_weight": company.behavioral_weight,
         "resume_weight": company.resume_weight,
         "dsa_weight": company.dsa_weight,
         "cs_weight": company.cs_weight,
-        "question_distribution": distribution,
         "weak_topics": [t for t, s in topic_scores.items() if s < 6.0],
-        "company_ids": company_ids,
     }
 
-    # Generate questions via Gemini (or fallback)
-    raw_questions: List[Dict] = generate_interview_questions(
-        resume_json=resume.parsed_data or {"raw_text": resume.raw_text[:3000]},
-        company_profile=company_dict,
+
+def _resume_document(resume: Resume) -> str:
+    parsed = resume.parsed_data or {}
+    return f"{resume.raw_text or ''}\n{json.dumps(parsed)[:4000]}"
+
+
+def _jd_document(raw_text: str, parsed: Dict[str, Any]) -> str:
+    return f"{raw_text}\n{json.dumps(parsed)[:3000]}"
+
+
+def _company_document(company: CompanyProfile) -> str:
+    topics = ", ".join(company.focus_topics or [])
+    return (
+        f"Company: {company.name}. Focus topics: {topics}. "
+        f"Interview weights out of 100 — behavioral {company.behavioral_weight}, "
+        f"resume {company.resume_weight}, DSA {company.dsa_weight}, "
+        f"CS fundamentals {company.cs_weight}."
     )
 
-    # Create session
+
+def _question_payload(question: InterviewQuestion, number: int) -> Dict[str, Any]:
+    return {
+        "id": str(question.id),
+        "number": number,
+        "category": question.category,
+        "text": question.question,
+        "difficulty": question.difficulty,
+        "is_followup": bool(question.is_followup),
+    }
+
+
+def start_interview(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    company_ids: List[str],
+    job_description: str,
+) -> Tuple[uuid.UUID, List[Dict[str, Any]]]:
+    """
+    Store the job description, index resume + JD + company, then generate 5 questions
+    from the retrieved context.
+    """
+    resume = _fetch_latest_resume(db, user_id)
+    if not company_ids:
+        raise ValueError("A company must be selected.")
+    jd_text = (job_description or "").strip()
+    if len(jd_text) < 40:
+        raise ValueError("Paste or upload a job description (at least a short paragraph).")
+
+    company = _fetch_company(db, company_ids[0])
+    topic_scores = _get_user_topic_scores(db, user_id)
+    company_dict = _company_dict(company, topic_scores)
+    parsed_jd = parse_job_description(jd_text)
+
+    job = JobDescription(
+        user_id=user_id,
+        company_id=uuid.UUID(str(company.id)),
+        raw_text=jd_text,
+        parsed_data=parsed_jd,
+    )
+    db.add(job)
+    db.flush()
+
     session = InterviewSession(
         user_id=user_id,
         company_id=uuid.UUID(str(company.id)),
+        job_description_id=job.id,
         readiness_before=0.0,
         readiness_after=0.0,
     )
     db.add(session)
-    db.flush()  # get session.id without committing
+    db.flush()
 
-    # Persist questions
+    index_source(db, user_id=user_id, session_id=session.id, source="resume", text=_resume_document(resume))
+    index_source(db, user_id=user_id, session_id=session.id, source="job_description", text=_jd_document(jd_text, parsed_jd))
+    index_source(db, user_id=user_id, session_id=session.id, source="company", text=_company_document(company))
+    db.flush()
+
+    retrieval_query = (
+        f"Interview questions for {company.name} role {parsed_jd.get('role_title', '')}. "
+        f"Focus: {', '.join(company.focus_topics or [])}. "
+        "Candidate skills, projects, experience, and job requirements."
+    )
+    context = retrieve(db, session_id=session.id, query=retrieval_query, k=5)
+
+    logger.info("Starting interview for user=%s company=%s", user_id, company.name)
+    raw_questions: List[Dict] = generate_interview_questions(
+        resume_json=resume.parsed_data or {"raw_text": (resume.raw_text or "")[:1500]},
+        company_profile=company_dict,
+        retrieved_context=context,
+    )
+
     questions_out = []
-    for i, q in enumerate(raw_questions[:10]):
-        question_text = q.get("question", "")
-        category = q.get("category", "General")
-        difficulty = float(q.get("difficulty", 50.0))
+    for i, q in enumerate(raw_questions[:5]):
+        question_text = (q.get("question") or "").strip()
+        if not question_text:
+            continue
+        category = q.get("category") or "General"
+        try:
+            difficulty = float(q.get("difficulty", 50.0))
+        except (TypeError, ValueError):
+            difficulty = 50.0
         iq = InterviewQuestion(
             session_id=session.id,
             question=question_text,
             category=category,
             difficulty=difficulty,
+            position=i + 1,
+            is_followup=False,
         )
         db.add(iq)
         db.flush()
-        questions_out.append({
-            "id": str(iq.id),
-            "number": i + 1,
-            "category": category,
-            "text": question_text,
-            "difficulty": difficulty,
-        })
+        questions_out.append(_question_payload(iq, i + 1))
 
     db.commit()
     logger.info("Created session %s with %d questions.", session.id, len(questions_out))
@@ -282,24 +331,53 @@ def submit_answer(
     resume = _fetch_latest_resume(db, user_id)
     company = _fetch_company(db, str(session.company_id))
 
-    company_dict = {
-        "name": company.name,
-        "focus_topics": company.focus_topics or [],
-    }
+    company_dict = _company_dict(company, _get_user_topic_scores(db, user_id))
+    context = retrieve(
+        db,
+        session_id=session.id,
+        query=f"{question.question}\n{answer}",
+        k=4,
+    )
 
-    # Evaluate with Gemini
     eval_result = evaluate_answer(
         answer=answer,
         question=question.question,
         category=question.category,
-        resume_json=resume.parsed_data or {"raw_text": resume.raw_text[:3000]},
+        resume_json=resume.parsed_data or {"raw_text": (resume.raw_text or "")[:1500]},
         company_profile=company_dict,
+        retrieved_context=context,
     )
 
     score = float(eval_result.get("score", 5.0))
     feedback = eval_result.get("feedback", "")
     strengths = eval_result.get("strengths", [])
     weaknesses = eval_result.get("weaknesses", [])
+    prior_answers = (
+        db.query(InterviewResponse)
+        .filter(InterviewResponse.question_id == question.id)
+        .count()
+    )
+
+    # Follow-up scores stay in Redis until the interview results are opened.
+    if question.is_followup:
+        cached = {
+            "id": str(uuid.uuid4()),
+            "question_id": str(question.id),
+            "answer": answer,
+            "score": score,
+            "feedback": feedback,
+            "strengths": strengths if isinstance(strengths, list) else [],
+            "weaknesses": weaknesses if isinstance(weaknesses, list) else [],
+            "created_at": "",
+            "category": question.category,
+            "followups": [],
+        }
+        try:
+            save_followup_eval(str(session.id), cached)
+            logger.info("Saved follow-up eval in Redis for session %s", session.id)
+            return cached
+        except Exception:
+            logger.warning("Redis unavailable, saving follow-up eval in Postgres instead.")
 
     # Persist the response
     response = InterviewResponse(
@@ -329,6 +407,49 @@ def submit_answer(
         session.mode_history = hist
         db.add(session)
 
+    followups_out: List[Dict[str, Any]] = []
+    if not question.is_followup and prior_answers == 0:
+        raw_followups = generate_followup_questions(
+            question=question.question,
+            answer=answer,
+            category=question.category,
+            score=score,
+            retrieved_context=context,
+            company_profile=company_dict,
+        )
+        parent_pos = question.position or 0
+        later = (
+            db.query(InterviewQuestion)
+            .filter(
+                InterviewQuestion.session_id == session.id,
+                InterviewQuestion.position.isnot(None),
+                InterviewQuestion.position > parent_pos,
+            )
+            .all()
+        )
+        for later_q in later:
+            later_q.position = (later_q.position or 0) + len(raw_followups)
+        for offset, item in enumerate(raw_followups, start=1):
+            text = (item.get("question") or "").strip()
+            if not text:
+                continue
+            try:
+                difficulty = float(item.get("difficulty", 55))
+            except (TypeError, ValueError):
+                difficulty = 55.0
+            follow = InterviewQuestion(
+                session_id=session.id,
+                question=text,
+                category=question.category,
+                difficulty=difficulty,
+                position=parent_pos + offset,
+                parent_question_id=question.id,
+                is_followup=True,
+            )
+            db.add(follow)
+            db.flush()
+            followups_out.append(_question_payload(follow, parent_pos + offset))
+
     db.commit()
     db.refresh(response)
 
@@ -338,10 +459,50 @@ def submit_answer(
         "answer": response.answer,
         "score": response.score,
         "feedback": feedback,
-        "strengths": strengths,
-        "weaknesses": weaknesses,
+        "strengths": strengths if isinstance(strengths, list) else [],
+        "weaknesses": weaknesses if isinstance(weaknesses, list) else [],
         "created_at": response.created_at.isoformat() if response.created_at else "",
+        "followups": followups_out,
     }
+
+
+def _flush_followup_evals(db: Session, *, user_id: uuid.UUID, session_id: str) -> None:
+    """Copy follow-up evaluations from Redis into Postgres, then drop the Redis key."""
+    try:
+        cached = list_followup_evals(session_id)
+    except Exception:
+        logger.warning("Could not read follow-up evals from Redis.")
+        return
+    if not cached:
+        return
+
+    for item in cached:
+        already = db.query(InterviewResponse).filter(
+            InterviewResponse.question_id == item["question_id"]
+        ).first()
+        if already:
+            continue
+        db.add(InterviewResponse(
+            question_id=item["question_id"],
+            answer=item.get("answer") or "",
+            score=float(item.get("score") or 0),
+            feedback=json.dumps({
+                "feedback": item.get("feedback") or "",
+                "strengths": item.get("strengths") or [],
+                "weaknesses": item.get("weaknesses") or [],
+            }),
+        ))
+        _update_topic_score(
+            db,
+            user_id=user_id,
+            topic=item.get("category") or "General",
+            new_score=float(item.get("score") or 0),
+        )
+    db.commit()
+    try:
+        clear_followup_evals(session_id)
+    except Exception:
+        logger.warning("Follow-up evals were saved, but the Redis key was not deleted.")
 
 
 def _update_topic_score(db: Session, *, user_id: uuid.UUID, topic: str, new_score: float) -> None:
@@ -383,6 +544,8 @@ def get_results(
     if not session:
         raise ValueError("Session not found.")
 
+    _flush_followup_evals(db, user_id=user_id, session_id=str(session.id))
+
     questions = db.query(InterviewQuestion).filter(
         InterviewQuestion.session_id == session.id
     ).all()
@@ -393,13 +556,15 @@ def get_results(
         InterviewResponse.question_id.in_(question_ids)
     ).all()
 
-    # Group scores by category
+    # Group scores by category. Overall is the average of every answer, including follow-ups.
     category_scores: Dict[str, List[float]] = {cat: [] for cat in ALL_TOPICS}
+    all_response_scores: List[float] = []
     for r in responses:
+        points = r.score * 10.0
+        all_response_scores.append(points)
         q = question_map.get(str(r.question_id))
         if q and q.category in category_scores:
-            # Score stored 0-10, convert to 0-100
-            category_scores[q.category].append(r.score * 10.0)
+            category_scores[q.category].append(points)
 
     def avg(lst: List[float]) -> float:
         return round(sum(lst) / len(lst), 1) if lst else 0.0
@@ -419,8 +584,7 @@ def get_results(
         ("DBMS", dbms_score),
         ("CN", cn_score),
     ]
-    answered_scores = [s for _, s in all_scores if s > 0]
-    overall_score = round(sum(answered_scores) / len(answered_scores), 1) if answered_scores else 0.0
+    overall_score = round(sum(all_response_scores) / len(all_response_scores), 1) if all_response_scores else 0.0
 
     # Determine strong (>= 70) and weak (< 50) topics from answered categories
     strong_topics = [name for name, s in all_scores if s >= 70.0]

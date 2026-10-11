@@ -1,40 +1,16 @@
 import re
-import os
 import json
 import logging
 from typing import Dict, Any, List
 
-# Optional import of Gemini SDK for type references
-try:
-    import google.generativeai as genai
-except ImportError:  # pragma: no cover
-    genai = None
-    logging.warning("google-generativeai package not installed – Gemini calls will be unavailable.")
-
-# Import dynamic Gemini configuration
-from app.config.gemini_config import get_gemini_model
-
-
-# Initialise Gemini client if API key is present.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# Gemini client configuration handled in gemini_config module.
-# No direct configuration needed here.
+from app.config.gemini_config import generate_text
 
 
 def extract_json(text: str):
-    """
-    Extract JSON object/array from Gemini response.
-
-    Handles:
-    - Pure JSON
-    - ```json ... ```
-    - Extra text before/after JSON
-    - Accidental backticks
-    """
-
+    
     text = text.strip()
 
-    # Extract first JSON object or JSON array
+    # Extract JSON array
     match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', text)
 
     if not match:
@@ -46,83 +22,108 @@ def extract_json(text: str):
 
 
 def _call_gemini(prompt: str, temperature: float = 0.1) -> Any:
-    """
-    Send prompt to Gemini and return parsed JSON response.
-    """
-
-    if not genai or not GEMINI_API_KEY:
-        logging.debug("Using fallback Gemini response")
+    text = generate_text(prompt, temperature=temperature, json_mode=True)
+    if not text:
+        logging.error("Using fallback questions because Gemini returned no text.")
         return {"fallback": True}
-
-    model = get_gemini_model()
-
-    if not model:
-        logging.debug("No Gemini model available")
-        return {"fallback": True}
-
-    print("Calling model with:", model.model_name)
-
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.types.GenerationConfig(
-            temperature=temperature,
-            response_mime_type="application/json",
-            max_output_tokens=2048
-        )
-    )
-
     try:
-        print("-" * 50)
-        print("RAW GEMINI RESPONSE:")
-        print(response.text)
-        print("-" * 50)
-
-        result = extract_json(response.text)
-
-        return result
-
+        return extract_json(text)
     except Exception as exc:
         logging.error("Failed to parse Gemini JSON response: %s", exc)
-        logging.error("RAW GEMINI OUTPUT:\n%s", response.text)
+        logging.error("RAW GEMINI OUTPUT:\n%s", text)
         raise
     
-def generate_interview_questions(resume_json: Dict[str, Any], company_profile: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Generate ten interview questions across the required categories.
+def _fallback_questions(company_profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    company = company_profile.get("name") or "this company"
+    topics = company_profile.get("focus_topics") or ["your recent project"]
+    topic = topics[0] if topics else "your recent project"
+    return [
+        {"question": f"Walk me through a project on your resume that is relevant to {company}.", "category": "Resume", "difficulty": 40},
+        {"question": f"Why do you want to work at {company}, and how does your experience fit the role?", "category": "Behavioral", "difficulty": 35},
+        {"question": f"How would you approach a {topic} problem in an interview at {company}?", "category": "DSA", "difficulty": 60},
+        {"question": "Explain a core CS concept you have used in a real project. Why did you choose it?", "category": "OS", "difficulty": 55},
+        {"question": "Which requirement in the job description is the hardest match for your background, and how would you close the gap?", "category": "Resume", "difficulty": 50},
+    ]
 
-    *resume_json* – JSON representation of the user’s parsed resume.
-    *company_profile* – DB record converted to a plain dict.
-    Returns a list of dicts: ``{"question": str, "category": str, "difficulty": float}``.
-    """
+
+def generate_interview_questions(
+    resume_json: Dict[str, Any],
+    company_profile: Dict[str, Any],
+    retrieved_context: str = "",
+) -> List[Dict[str, Any]]:
     prompt = (
-        "You are an AI interview coach. Using the provided resume and company profile, "
-        "generate exactly 10 interview questions covering the following categories: "
-        "Resume, Behavioral, Data Structures & Algorithms (DSA), Operating Systems (OS), "
-        "Database Management Systems (DBMS), and Computer Networks (CN). "
-        "Distribute the questions as evenly as possible (e.g., 2 per category). "
-        "For each question also suggest a difficulty score from 0 to 100. "
-        "Output a JSON array where each element has keys: 'question', 'category', 'difficulty'.\n\n"
-        f"Resume JSON:\n{json.dumps(resume_json, indent=2)}\n\n"
-        f"Company Profile:\n{json.dumps(company_profile, indent=2)}\n"
+        "You are an interview coach. Using ONLY the retrieved context plus the short profile below, "
+        "generate exactly 5 opening interview questions for this candidate and role. "
+        "Mix resume, behavioral, and technical questions that this company actually cares about. "
+        "Each question must be specific to the candidate or the job, not a generic textbook prompt. "
+        "Category must be one of: Resume, Behavioral, DSA, OS, DBMS, CN. "
+        "Difficulty is a number from 0 to 100. "
+        "Return a JSON array of objects with keys question, category, difficulty.\n\n"
+        f"Retrieved context:\n{retrieved_context or 'No extra context.'}\n\n"
+        f"Resume summary:\n{json.dumps(resume_json, indent=2)[:2500]}\n\n"
+        f"Company profile:\n{json.dumps(company_profile, indent=2)}\n"
     )
-    result = _call_gemini(prompt)
-    # If fallback, generate simple deterministic questions.
+    try:
+        result = _call_gemini(prompt, temperature=0.4)
+    except Exception as exc:
+        logging.error("Question generation failed: %s", exc)
+        result = {"fallback": True}
     if isinstance(result, dict) and result.get("fallback"):
-        categories = ["Resume", "Behavioral", "DSA", "OS", "DBMS", "CN"]
-        questions = []
-        for i, cat in enumerate(categories):
-            for j in range(2):  # two per category
-                questions.append({
-                    "question": f"Sample {cat} question {j+1}",
-                    "category": cat,
-                    "difficulty": 50.0
-                })
-        return questions[:10]
-    # Expect result to be a list.
-    if isinstance(result, list):
-        return result
-    # Unexpected shape – fallback.
+        return _fallback_questions(company_profile)
+    if isinstance(result, list) and result:
+        return result[:5]
     logging.warning("Unexpected Gemini output for question generation: %s", result)
-    return []
+    return _fallback_questions(company_profile)
+
+
+def generate_followup_questions(
+    *,
+    question: str,
+    answer: str,
+    category: str,
+    score: float,
+    retrieved_context: str,
+    company_profile: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    count = 3 if score < 6 else 2
+    prompt = (
+        f"You are an interviewer at {company_profile.get('name', 'the company')}. "
+        f"The candidate just answered a {category} question. "
+        f"Write exactly {count} follow-up questions that probe gaps, unclear claims, or missing depth in THIS answer. "
+        "Use the retrieved context so follow-ups stay tied to the resume and job description. "
+        "Do not repeat the original question. "
+        f"Set category to '{category}'. Difficulty is 0-100. "
+        "Return a JSON array of objects with keys question, category, difficulty.\n\n"
+        f"Original question:\n{question}\n\n"
+        f"Candidate answer:\n{answer}\n\n"
+        f"Score so far: {score}/10\n\n"
+        f"Retrieved context:\n{retrieved_context or 'No extra context.'}\n"
+    )
+    try:
+        result = _call_gemini(prompt, temperature=0.5)
+    except Exception as exc:
+        logging.error("Follow-up generation failed: %s", exc)
+        result = {"fallback": True}
+    if isinstance(result, list) and result:
+        cleaned = []
+        for item in result[:count]:
+            if isinstance(item, dict) and item.get("question"):
+                item["category"] = category
+                cleaned.append(item)
+        if cleaned:
+            return cleaned
+    return [
+        {
+            "question": f"Can you go deeper on one specific detail from your answer to: {question}",
+            "category": category,
+            "difficulty": 55,
+        },
+        {
+            "question": "What tradeoff did you consider, and what would you do differently next time?",
+            "category": category,
+            "difficulty": 60,
+        },
+    ][:count]
 
 def generate_mode_questions(mode: str, resume_json: Dict[str, Any], company_profile: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Generate questions specific to a mode.
@@ -161,7 +162,14 @@ def generate_mode_questions(mode: str, resume_json: Dict[str, Any], company_prof
     logging.warning("Unexpected Gemini output for mode %s questions: %s", mode, result)
 
 
-def evaluate_answer(answer: str, question: str, category: str, resume_json: Dict[str, Any], company_profile: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_answer(
+    answer: str,
+    question: str,
+    category: str,
+    resume_json: Dict[str, Any],
+    company_profile: Dict[str, Any],
+    retrieved_context: str = "",
+) -> Dict[str, Any]:
     """Evaluate a user's answer with Gemini and return scoring details.
 
     Returns a dict with keys: ``score``, ``strengths`` (list), ``weaknesses`` (list), ``feedback`` (str).
@@ -202,8 +210,10 @@ def evaluate_answer(answer: str, question: str, category: str, resume_json: Dict
         {question}
         Candidate Answer:
         {answer}
-        Resume:
-        {json.dumps(resume_json, indent=2)}
+        Retrieved context:
+        {retrieved_context or "None"}
+        Resume summary:
+        {json.dumps(resume_json, indent=2)[:2000]}
         Company Profile:
         {json.dumps(company_profile, indent=2)}
         """

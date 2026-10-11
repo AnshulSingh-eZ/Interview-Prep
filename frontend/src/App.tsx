@@ -3,7 +3,6 @@ import { Route, Routes, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 
-// Page imports
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -16,7 +15,7 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col min-h-screen">
       <Navbar />
-      <main className="flex-1 container mx-auto p-4">
+      <main className="flex-1">
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />

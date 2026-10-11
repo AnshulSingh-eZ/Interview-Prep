@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../services/api";
 
 interface Company {
@@ -12,10 +12,8 @@ interface Company {
     dsa: number;
     cs_fundamentals: number;
   };
-  created_at: string;
 }
 
-// Map backend flat response to nested weight_distribution
 function mapCompany(raw: any): Company {
   return {
     id: String(raw.id),
@@ -27,30 +25,18 @@ function mapCompany(raw: any): Company {
       dsa: raw.weight_distribution?.dsa ?? raw.dsa_weight ?? 0,
       cs_fundamentals: raw.weight_distribution?.cs_fundamentals ?? raw.cs_weight ?? 0,
     },
-    created_at: raw.created_at ?? "",
   };
 }
-
-const COMPANY_COLORS: Record<string, string> = {
-  Amazon: "from-orange-500 to-yellow-400",
-  Google: "from-blue-500 to-green-400",
-  Microsoft: "from-blue-600 to-cyan-400",
-  Adobe: "from-red-600 to-orange-400",
-  Atlassian: "from-blue-700 to-blue-400",
-  Uber: "from-gray-800 to-gray-600",
-  Walmart: "from-blue-500 to-yellow-400",
-  Apple: "from-gray-700 to-gray-400",
-  "Goldman Sachs": "from-sky-700 to-sky-400",
-  Flipkart: "from-yellow-500 to-orange-400",
-};
 
 const Companies: React.FC = () => {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState<string | null>(null); // company id being started (unused now)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [starting, setStarting] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [jobDescription, setJobDescription] = useState("");
 
   useEffect(() => {
     const fetchCompanies = async () => {
@@ -58,7 +44,7 @@ const Companies: React.FC = () => {
         const data = await api<any[]>("/companies/", { method: "GET" });
         setCompanies(data.map(mapCompany));
       } catch (err: any) {
-        setError(err.message || "Failed to load companies. Please try again.");
+        setError(err.message || "Failed to load companies.");
       } finally {
         setLoading(false);
       }
@@ -66,117 +52,134 @@ const Companies: React.FC = () => {
     fetchCompanies();
   }, []);
 
-  const startInterview = async () => {
-    if (selectedIds.size === 0) {
-      setError("Select at least one company to start the interview.");
-      return;
-    }
-    setStarting("starting");
+  const onJdFile = async (file: File) => {
+    setReadingFile(true);
     setError(null);
     try {
-      const result = await api<{ session_id: string; questions: any[] }>(
-        "/interview/start",
-        {
+      const isPdf = file.name.toLowerCase().endsWith(".pdf");
+      if (isPdf) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const result = await api<{ text: string }>("/interview/jd/extract", {
           method: "POST",
-          body: JSON.stringify({ company_ids: Array.from(selectedIds) }),
-        }
-      );
+          body: formData,
+        });
+        setJobDescription(result.text);
+      } else {
+        setJobDescription(await file.text());
+      }
+    } catch (err: any) {
+      setError(err.message || "Could not read that job description.");
+    } finally {
+      setReadingFile(false);
+    }
+  };
+
+  const startInterview = async () => {
+    if (!selectedId) {
+      setError("Select one company.");
+      return;
+    }
+    if (jobDescription.trim().length < 40) {
+      setError("Add a job description before starting.");
+      return;
+    }
+    setStarting(true);
+    setError(null);
+    try {
+      const result = await api<{ session_id: string; questions: any[] }>("/interview/start", {
+        method: "POST",
+        body: JSON.stringify({
+          company_id: selectedId,
+          job_description: jobDescription.trim(),
+        }),
+      });
       localStorage.setItem("session_id", result.session_id);
-      localStorage.setItem(
-        `questions_${result.session_id}`,
-        JSON.stringify(result.questions)
-      );
       navigate(`/interview/${result.session_id}`);
     } catch (err: any) {
-      setStarting(null);
-      setError(err.message || "Failed to start interview. Please try again.");
+      setError(err.message || "Failed to start interview.");
+      setStarting(false);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-gray-500 font-medium">Loading companies…</p>
-        </div>
+      <div className="page flex min-h-[50vh] flex-col items-center justify-center gap-4">
+        <div className="spinner" />
+        <p>Loading companies…</p>
       </div>
     );
   }
 
+  const selected = companies.find((company) => company.id === selectedId);
+
   return (
-    <div className="container mx-auto py-8 space-y-8">
-      {/* Header */}
+    <div className="page space-y-8">
       <div>
-        <h1 className="text-4xl font-extrabold text-gray-900">Select a Company</h1>
-        <p className="mt-2 text-gray-500 text-lg">
-          Choose a company to start an AI-powered mock interview tailored to their hiring style.
+        <h1 className="text-4xl">Set up the interview</h1>
+        <p className="mt-2 max-w-2xl">
+          Choose a company, then paste or upload the job description. Questions are generated from your resume, this JD, and the company profile.
+        </p>
+        <p className="mt-2 text-sm">
+          Resume not uploaded yet? <Link to="/resume" className="text-indigo-300">Upload it first.</Link>
         </p>
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 flex items-center gap-2">
-          <span className="text-red-500">⚠</span>
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <div className="alert alert-error">{error}</div>}
 
-      {/* Empty state */}
-      {!companies.length && !error && (
-        <div className="text-center py-20 text-gray-400">
-          <p className="text-6xl mb-4">🏢</p>
-          <p className="text-xl font-medium">No companies found.</p>
-          <p className="text-sm mt-2">Contact your admin to seed company profiles.</p>
-        </div>
-      )}
-
-      {/* Company Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {companies.map((c) => {
-          const gradient = COMPANY_COLORS[c.name] || "from-gray-500 to-gray-400";
-          const isSelected = selectedIds.has(c.id);
-
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {companies.map((company) => {
+          const active = company.id === selectedId;
           return (
-            <div
-              key={c.id}
-              className={`card ${isSelected ? "border-4 border-indigo-500" : ""}`}
-              onClick={() => {
-                const newSet = new Set(selectedIds);
-                if (newSet.has(c.id)) newSet.delete(c.id);
-                else newSet.add(c.id);
-                setSelectedIds(newSet);
-              }}
+            <button
+              key={company.id}
+              onClick={() => setSelectedId(company.id)}
+              className={`card p-5 text-left ${active ? "border-indigo-400/70 shadow-[0_0_0_1px_rgba(129,140,248,0.5)]" : ""}`}
             >
-              {/* Card header gradient */}
-              <div className={`h-2 w-full bg-gradient-to-r ${gradient}`} />
-
-              <div className="p-6 flex flex-col flex-1 gap-4">
-                {/* Company name */}
-                <h2 className="text-2xl font-bold text-gray-900">{c.name}</h2>
+              <h2 className="text-xl">{company.name}</h2>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {company.focus_topics.slice(0, 4).map((topic) => (
+                  <span key={topic} className="badge badge-primary">
+                    {topic}
+                  </span>
+                ))}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
-      
-      {/* Global Start Interview button */}
-      <div className="flex justify-center mt-6">
-        <button
-          onClick={startInterview}
-          disabled={starting !== null || selectedIds.size === 0}
-          className={"btn-primary w-48" + (starting ? " opacity-70" : "")}
-        >
-          {starting ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Starting…
-            </span>
-          ) : (
-            "Start Interview →"
-          )}
+
+      <section className="card space-y-4 p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-xl">Job description</h2>
+            <p className="mt-1 text-sm">
+              {selected ? `Preparing for ${selected.name}.` : "Select a company above."}
+            </p>
+          </div>
+          <label className="btn-ghost cursor-pointer">
+            {readingFile ? "Reading file…" : "Upload JD"}
+            <input
+              type="file"
+              accept=".pdf,.txt,.md,text/plain"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onJdFile(file);
+              }}
+            />
+          </label>
+        </div>
+        <textarea
+          rows={8}
+          value={jobDescription}
+          onChange={(e) => setJobDescription(e.target.value)}
+          placeholder="Paste the role summary, responsibilities, and required skills."
+        />
+        <button onClick={startInterview} disabled={starting || !selectedId} className="btn-primary sm:w-auto sm:px-8">
+          {starting ? "Building your question set…" : "Start interview"}
         </button>
-      </div>
+      </section>
     </div>
   );
 };

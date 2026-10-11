@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
+import React, { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,62 +16,38 @@ const Login: React.FC = () => {
     setError(null);
     try {
       await login(email, password);
-      navigate('/dashboard');
-    } catch (err:any) {
-      setError(err.message || 'Login failed');
+      navigate("/dashboard");
+    } catch (err: any) {
+      setError(err.message || "Login failed");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <div className="bg-white rounded-lg shadow-md p-8 w-full max-w-md">
-        <h2 className="text-2xl font-semibold text-gray-800 mb-6 text-center">Login</h2>
-        {error && <div className="bg-red-100 text-red-700 p-2 rounded mb-4">{error}</div>}
+    <div className="page flex justify-center pt-10">
+      <div className="card w-full max-w-md p-8">
+        <h1 className="text-3xl">Welcome back</h1>
+        <p className="mt-2 mb-6 text-sm">Sign in to continue your interview practice.</p>
+        {error && <div className="alert alert-error mb-4">{error}</div>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-            />
+            <label htmlFor="email">Email</label>
+            <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              required
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-            />
+            <label htmlFor="password">Password</label>
+            <input id="password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary text-white py-2 rounded hover:bg-primary-dark transition-colors disabled:opacity-50"
-          >
-            {loading ? (
-              <svg className="animate-spin h-5 w-5 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
-              </svg>
-            ) : (
-              'Login'
-            )}
+          <button type="submit" disabled={loading} className="btn-primary">
+            {loading ? "Signing in…" : "Login"}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-gray-600">
-          Don't have an account?{' '}
-          <a href="/register" className="text-primary hover:underline">
-            Register
-          </a>
+        <p className="mt-5 text-center text-sm">
+          New here?{" "}
+          <Link to="/register" className="text-gradient font-semibold">
+            Create an account
+          </Link>
         </p>
       </div>
     </div>

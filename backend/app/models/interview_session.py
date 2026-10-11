@@ -10,6 +10,7 @@ class InterviewSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     company_id = Column(UUID(as_uuid=True), nullable=False)
+    job_description_id = Column(UUID(as_uuid=True), nullable=True)
     readiness_before = Column(Float, default=0.0)
     readiness_after = Column(Float, default=0.0)
     # Store the current interview mode (e.g., DSA, Behavioural, etc.)

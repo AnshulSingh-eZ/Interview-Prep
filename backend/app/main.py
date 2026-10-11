@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base, SessionLocal, ensure_extra_columns
 from app.models.user import User
 from app.models.company import CompanyProfile
 from app.models.resume import Resume
+from app.models.job_description import JobDescription
+from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.interview_question import InterviewQuestion
 from app.models.interview_session import InterviewSession
 from app.models.interview_response import InterviewResponse
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
     """Create tables and seed data on startup."""
     logger.info("Creating database tables…")
     Base.metadata.create_all(bind=engine)
+    ensure_extra_columns()
 
     logger.info("Running company seed check…")
     db = SessionLocal()
