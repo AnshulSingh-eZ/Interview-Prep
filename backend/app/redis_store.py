@@ -1,8 +1,3 @@
-"""Tiny Redis helper for follow-up evaluations.
-
-Follow-up scores sit here while the interview is still going.
-When the user opens results, we copy them into Postgres and delete the key.
-"""
 import json
 import os
 
