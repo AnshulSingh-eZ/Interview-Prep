@@ -9,7 +9,6 @@ from app.models.interview_session import InterviewSession
 from app.models.interview_response import InterviewResponse
 from app.models.interview_question import InterviewQuestion
 
-# Utility: fetch or default score for a topic (0-10 scale)
 def _topic_score_lookup(scores: Dict[str, TopicScore], topic: str) -> float:
     ts = scores.get(topic)
     return ts.average_score if ts else 0.0
@@ -19,44 +18,31 @@ def _fetch_user_topic_scores(db: Session, user_id: uuid.UUID) -> Dict[str, Topic
     return {row.topic: row for row in rows}
 
 def calculate_readiness(db: Session, *, user_id: uuid.UUID, company_id: str) -> Dict:
-    """Calculate company‑specific readiness for a user.
-
-    Returns a dict matching the ``ReadinessOut`` schema.
-    Uses the company profile's weight fields (behavioral_weight, resume_weight,
-    dsa_weight, cs_weight) and the user’s historical TopicScores.
-    """
-    # 1️⃣ fetch company profile and weights
     company: CompanyProfile = (
         db.query(CompanyProfile).filter(CompanyProfile.id == company_id).first()
     )
     if not company:
         raise ValueError("Company profile not found")
 
-    # Default weight dict (percentage values). If a weight is missing treat as 0.
     weights = {
         "Behavioral": company.behavioral_weight or 0.0,
         "Resume": company.resume_weight or 0.0,
         "DSA": company.dsa_weight or 0.0,
-        # CS fundamentals weight is stored in cs_weight – we map it to the "CS" topic.
         "CS": company.cs_weight or 0.0,
     }
 
-    # 2️⃣ fetch user's topic scores
     user_scores = _fetch_user_topic_scores(db, user_id)
 
-    # 3️⃣ compute per‑category percentage scores (scale 0‑10 -> 0‑100)
     per_category = {}
     for cat in weights.keys():
         raw = _topic_score_lookup(user_scores, cat)
         per_category[cat] = round(raw * 10, 2)  # convert to 0‑100 scale
 
-    # 4️⃣ weighted overall readiness (weights sum to 100)
     overall = 0.0
     for cat, weight in weights.items():
         overall += per_category.get(cat, 0.0) * (weight / 100.0)
     overall = round(overall, 2)
 
-    # 5️⃣ expose the full response structure (include OS, DBMS, CN even if weight 0)
     result = {
         "readiness_score": overall,
         "resume_score": per_category.get("Resume", 0.0),
@@ -96,7 +82,6 @@ def get_history(db: Session, *, user_id: uuid.UUID) -> List[Dict]:
     )
     history = []
     for sess in sessions:
-        # fetch all responses belonging to this session
         responses = (
             db.query(InterviewResponse)
             .join(InterviewQuestion, InterviewResponse.question_id == InterviewQuestion.id)
