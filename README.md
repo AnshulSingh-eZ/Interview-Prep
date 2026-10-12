@@ -11,6 +11,12 @@ The platform takes a candidate's resume and the job they are preparing for, extr
 It uses a retrieval-augmented generation (RAG) pipeline to provide the language model with relevant candidate and job-specific context before generating questions and feedback.
 
 The platform also keeps track of previous interview sessions so that future interviews can be adapted based on the candidate's history.
+## Preview:
+<img width="959" height="437" alt="image" src="https://github.com/user-attachments/assets/97d2fe95-2f49-43ee-b114-f0539dbecbfc" />
+<img width="959" height="437" alt="image" src="https://github.com/user-attachments/assets/ea2d4a25-dc7a-482c-8aa9-918609cd8301" />
+<img width="959" height="434" alt="image" src="https://github.com/user-attachments/assets/bf43c351-beac-410c-8d21-326a2ee4b004" />
+<img width="956" height="435" alt="image" src="https://github.com/user-attachments/assets/5cfeaf8f-545f-41b4-ba76-173c9f356a4b" />
+
 
 ## Features
 
